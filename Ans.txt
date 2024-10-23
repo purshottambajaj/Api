@@ -1,0 +1,160 @@
+1: Data Model, API & Efficient Retrieval
+   
+    Users Table :
+
+   CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    child_school_id VARCHAR(255) NOT NULL,
+    community VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+      Circles Table:
+  CREATE TABLE circles (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    parent_circle_id INT,
+    FOREIGN KEY (parent_circle_id) REFERENCES circles(id)
+);
+
+    User_Circle Table: 
+CREATE TABLE user_circle (
+    user_id INT,
+    circle_id INT,
+    PRIMARY KEY (user_id, circle_id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (circle_id) REFERENCES circles(id)
+);
+
+     server.js (api)
+
+app.post('/api/parents', async (req, res) => {
+    const { name, email, child_school_id, community } = req.body;
+    
+    // Create the parent
+    const parent = await pool.query(
+        'INSERT INTO users (name, email, child_school_id, community) VALUES ($1, $2, $3, $4) RETURNING id',
+        [name, email, child_school_id, community]
+    );
+
+    const parentId = parent.rows[0].id;
+
+    // Logic to create circles
+    const circlesToCreate = [
+        `DPS School`,
+        `Class I, DPS School`,
+        `Section F, Class I, DPS School`,
+        community ? `Brigade Society` : null,
+        community ? `Brigade Society, DPS School` : null
+    ].filter(Boolean); // Remove null values
+
+    for (const circleName of circlesToCreate) {
+        const circle = await pool.query(
+            'INSERT INTO circles (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING id',
+            [circleName]
+        );
+
+        if (circle.rows.length > 0) {
+            await pool.query(
+                'INSERT INTO user_circle (user_id, circle_id) VALUES ($1, $2)',
+                [parentId, circle.rows[0].id]
+            );
+        }
+    }
+
+    res.status(201).json({ parentId });
+});
+
+app.listen(3000, () => {
+    console.log('Server is running on port 3000');
+});
+
+
+2: Parent Posting to a Circle
+
+
+CREATE TABLE posts (
+    id SERIAL PRIMARY KEY,
+    user_id INT,
+    circle_id INT,
+    content TEXT,
+    parent_post_id INT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (circle_id) REFERENCES circles(id),
+    FOREIGN KEY (parent_post_id) REFERENCES posts(id)
+);
+
+     #api 
+
+app.post('/api/circles/:circleId/posts', async (req, res) => {
+    const { circleId } = req.params;
+    const { userId, content } = req.body;
+
+    const post = await pool.query(
+        'INSERT INTO posts (user_id, circle_id, content) VALUES ($1, $2, $3) RETURNING id',
+        [userId, circleId, content]
+    );
+
+    res.status(201).json({ postId: post.rows[0].id });
+});
+
+app.post('/api/posts/:postId/replies', async (req, res) => {
+    const { postId } = req.params;
+    const { userId, content } = req.body;
+
+    const reply = await pool.query(
+        'INSERT INTO posts (user_id, parent_post_id, content) VALUES ($1, $2, $3) RETURNING id',
+        [userId, postId, content]
+    );
+
+    res.status(201).json({ replyId: reply.rows[0].id });
+});
+
+app.post('/api/posts/:postId/vote', async (req, res) => {
+    const { postId } = req.params;
+    const { vote } = req.body;
+
+    // Logic for upvoting/downvoting would go here
+    res.status(200).send('Vote recorded');
+});
+
+
+
+3: Schema Evolution
+
+CREATE TABLE parent_circles (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    creator_id INT,
+    FOREIGN KEY (creator_id) REFERENCES users(id)
+);
+
+    # Add a grade column to the existing circles table to track grades:
+
+ALTER TABLE circles ADD COLUMN grade VARCHAR(10);
+
+
+4: Enhancements for New Circles
+          #Update  
+    ALTER TABLE circles ADD COLUMN parent_circle_id INT;
+
+
+           #api 
+
+app.post('/api/circles', async (req, res) => {
+    const { name, parentCircleId } = req.body;
+
+    const newCircle = await pool.query(
+        'INSERT INTO circles (name, parent_circle_id) VALUES ($1, $2) RETURNING id',
+        [name, parentCircleId]
+    );
+
+    res.status(201).json({ circleId: newCircle.rows[0].id });
+});
+
+app.get('/api/circles/discover', async (req, res) => {
+    const circles = await pool.query('SELECT * FROM circles');
+    res.json(circles.rows);
+});
